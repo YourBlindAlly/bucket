@@ -1,0 +1,7 @@
+{
+  "name": "MidiClick",
+  "slug": "midiclick",
+  "version": "1.0",
+  "built": "2026-10-23 15:29 UTC",
+  "notes": "You can now choose which MIDI sources MidiClick listens to. Your pedal is on by default; other apps like MidiBed are off, so they can't trigger clicks.\nTones per control, a sound picker, and left, center or right placement are in this build too."
+}
