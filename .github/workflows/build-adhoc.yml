@@ -1,0 +1,242 @@
+name: Build ad hoc IPA
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        required: true
+        type: string
+      scheme:
+        required: true
+        type: string
+      bundle_id:
+        required: true
+        type: string
+      team_id:
+        required: true
+        type: string
+    secrets:
+      ASC_KEY_ID:
+        required: true
+      ASC_ISSUER_ID:
+        required: true
+      ASC_KEY_P8:
+        required: true
+      BUCKET_TOKEN:
+        required: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Check secrets are present
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          BUCKET_TOKEN: ${{ secrets.BUCKET_TOKEN }}
+          TEAM: ${{ inputs.team_id }}
+        run: |
+          missing=""
+          [ -z "$ASC_KEY_ID" ] && missing="$missing ASC_KEY_ID"
+          [ -z "$ASC_ISSUER_ID" ] && missing="$missing ASC_ISSUER_ID"
+          [ -z "$ASC_KEY_P8" ] && missing="$missing ASC_KEY_P8"
+          [ -z "$BUCKET_TOKEN" ] && missing="$missing BUCKET_TOKEN"
+          [ -z "$TEAM" ] && missing="$missing APPLE_TEAM_ID"
+          if [ -n "$missing" ]; then
+            echo "These values are empty:$missing. Run add-app-secrets.bat again."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Write App Store Connect API key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/keys/AuthKey.p8"
+
+      - name: Clear old development certificates
+        env:
+          KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          # Every cloud-signed run asks Apple for a fresh development certificate and never gives it back,
+          # so the account eventually hits its limit. Delete the old development ones; distribution certificates are left alone.
+          python3 -m pip install --quiet --break-system-packages cryptography || true
+          python3 - <<'PY'
+          import base64, json, os, sys, time, urllib.request, urllib.error
+          try:
+              from cryptography.hazmat.primitives import hashes, serialization
+              from cryptography.hazmat.primitives.asymmetric import ec
+              from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+
+              def b64(b):
+                  return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+              now = int(time.time())
+              header = {"alg": "ES256", "kid": os.environ["KEY_ID"], "typ": "JWT"}
+              payload = {"iss": os.environ["ISSUER_ID"], "iat": now, "exp": now + 600, "aud": "appstoreconnect-v1"}
+              signing_input = b64(json.dumps(header).encode()) + "." + b64(json.dumps(payload).encode())
+              with open(os.path.join(os.environ["RUNNER_TEMP"], "keys", "AuthKey.p8"), "rb") as f:
+                  key = serialization.load_pem_private_key(f.read(), password=None)
+              r, s = decode_dss_signature(key.sign(signing_input.encode(), ec.ECDSA(hashes.SHA256())))
+              token = signing_input + "." + b64(r.to_bytes(32, "big") + s.to_bytes(32, "big"))
+
+              def call(method, url):
+                  req = urllib.request.Request(url, method=method, headers={"Authorization": "Bearer " + token})
+                  with urllib.request.urlopen(req) as resp:
+                      body = resp.read()
+                      return json.loads(body) if body else {}
+
+              url = "https://api.appstoreconnect.apple.com/v1/certificates?limit=200"
+              certs = []
+              while url:
+                  page = call("GET", url)
+                  certs.extend(page.get("data", []))
+                  url = page.get("links", {}).get("next")
+              counts = {}
+              for c in certs:
+                  t = c["attributes"]["certificateType"]
+                  counts[t] = counts.get(t, 0) + 1
+              print("Certificates in the account by type:", counts)
+              removed = 0
+              for c in certs:
+                  if c["attributes"]["certificateType"] in ("IOS_DEVELOPMENT", "DEVELOPMENT"):
+                      call("DELETE", "https://api.appstoreconnect.apple.com/v1/certificates/" + c["id"])
+                      removed += 1
+              print("Deleted development certificates:", removed)
+          except urllib.error.HTTPError as e:
+              print("Certificate cleanup skipped, Apple answered", e.code, e.read()[:300])
+          except Exception as e:
+              print("Certificate cleanup skipped:", repr(e))
+          sys.exit(0)
+          PY
+
+      - name: Archive
+        env:
+          APP: ${{ inputs.app_name }}
+          SCHEME: ${{ inputs.scheme }}
+          TEAM: ${{ inputs.team_id }}
+          KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          xcodebuild archive \
+            -project "$APP.xcodeproj" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/app.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM" \
+            CODE_SIGN_STYLE=Automatic
+
+      - name: Export ad hoc IPA
+        env:
+          TEAM: ${{ inputs.team_id }}
+          KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>ad-hoc</string>
+            <key>teamID</key><string>$TEAM</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>compileBitcode</key><false/>
+            <key>stripSwiftSymbols</key><true/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/app.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID"
+          ls -l "$RUNNER_TEMP/export"
+
+      - name: Publish to bucket
+        env:
+          APP: ${{ inputs.app_name }}
+          BUNDLE: ${{ inputs.bundle_id }}
+          OWNER: ${{ github.repository_owner }}
+          BUCKET_TOKEN: ${{ secrets.BUCKET_TOKEN }}
+        run: |
+          IPA=$(ls "$RUNNER_TEMP"/export/*.ipa | head -n 1)
+          VERSION=$(unzip -p "$IPA" 'Payload/*.app/Info.plist' > "$RUNNER_TEMP/Info.plist" && /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$RUNNER_TEMP/Info.plist")
+          SLUG=$(echo "$APP" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9\n' '-')
+          OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          BASE="https://${OWNER_LC}.github.io/bucket"
+          BUILT=$(date -u +"%Y-%m-%d %H:%M UTC")
+
+          # What's new: whats-new.txt in the app repo if present, else the last commit subject.
+          if [ -f "$GITHUB_WORKSPACE/whats-new.txt" ]; then
+            NOTES=$(head -c 600 "$GITHUB_WORKSPACE/whats-new.txt")
+          else
+            NOTES=$(git -C "$GITHUB_WORKSPACE" log -1 --pretty=%s)
+          fi
+
+          git clone --depth 1 "https://x-access-token:${BUCKET_TOKEN}@github.com/${OWNER}/bucket.git" "$RUNNER_TEMP/bucket"
+          cd "$RUNNER_TEMP/bucket"
+          mkdir -p "$SLUG"
+          cp "$IPA" "$SLUG/$SLUG.ipa"
+
+          cat > "$SLUG/manifest.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>items</key>
+            <array>
+              <dict>
+                <key>assets</key>
+                <array>
+                  <dict>
+                    <key>kind</key><string>software-package</string>
+                    <key>url</key><string>${BASE}/${SLUG}/${SLUG}.ipa</string>
+                  </dict>
+                </array>
+                <key>metadata</key>
+                <dict>
+                  <key>bundle-identifier</key><string>${BUNDLE}</string>
+                  <key>bundle-version</key><string>${VERSION}</string>
+                  <key>kind</key><string>software</string>
+                  <key>title</key><string>${APP}</string>
+                </dict>
+              </dict>
+            </array>
+          </dict>
+          </plist>
+          EOF
+
+          APP="$APP" SLUG="$SLUG" VERSION="$VERSION" BUILT="$BUILT" NOTES="$NOTES" python3 - <<'PY' > "$SLUG/meta.json"
+          import json, os
+          e = os.environ
+          print(json.dumps({"name": e["APP"], "slug": e["SLUG"], "version": e["VERSION"],
+                            "built": e["BUILT"], "notes": e["NOTES"]}, indent=2))
+          PY
+
+          BASE_URL="$BASE" python3 tools/make_index.py
+
+          # Keep the repo small: replace history with a single fresh commit each time.
+          git config user.name "build"
+          git config user.email "build@users.noreply.github.com"
+          git checkout --orphan publish
+          git add -A
+          git commit -q -m "Update ${APP} ${VERSION}"
+          git push -f origin publish:main

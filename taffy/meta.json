@@ -1,0 +1,7 @@
+{
+  "name": "Taffy",
+  "slug": "taffy",
+  "version": "1.0",
+  "built": "2026-10-26 17:03 UTC",
+  "notes": "Zephyr rebuilt: it now plays real chords. Each note has a clear body with thin upper harmonics that shimmer in and out (never out of tune with the chord), plus a soft pitched hiss; the noise burst at the start is gone, so the start is a gentle swell. The three settings are now Zephyr edge, air and shimmer. The saw sounds are much softer by default: Saw softness is now 8 and uses a steeper slope, which takes most of the zing off the top."
+}

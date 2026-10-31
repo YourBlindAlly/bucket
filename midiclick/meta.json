@@ -1,0 +1,7 @@
+{
+  "name": "MidiClick",
+  "slug": "midiclick",
+  "version": "1.0",
+  "built": "2026-10-28 01:05 UTC",
+  "notes": "New: a Pedal timing section. It logs every message your pedal sends with exact times: the gap between presses, how long each press lasts, and anything odd. Use Share report to email the results to yourself, or Copy report.\nSource choice, tones per control, a sound picker, and left, center or right placement are in this build too."
+}
