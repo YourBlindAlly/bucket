@@ -1,0 +1,7 @@
+{
+  "name": "WavePool",
+  "slug": "wavepool",
+  "version": "1.0",
+  "built": "2026-11-21 06:42 UTC",
+  "notes": "New: High note level on the Chord player sheet. Raise it to make the higher notes of each chord quieter. It starts at 0, which changes nothing. The chord player also keeps playing with the screen off."
+}
