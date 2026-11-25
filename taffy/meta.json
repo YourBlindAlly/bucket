@@ -1,0 +1,7 @@
+{
+  "name": "Taffy",
+  "slug": "taffy",
+  "version": "1.0",
+  "built": "2026-11-22 18:02 UTC",
+  "notes": "New MIDI out section in Settings. Chords, bass and chimes can each play on the built-in sound or be sent as MIDI on a channel from 1 to 16 to other apps on the phone (Taffy shows up as a MIDI source called Taffy). Choosing a MIDI channel mutes the built-in sound for that part, so you can send the chords to another synth and keep the chimes in Taffy."
+}

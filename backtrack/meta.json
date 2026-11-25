@@ -1,0 +1,7 @@
+{
+  "name": "Backtrack",
+  "slug": "backtrack",
+  "version": "1.0",
+  "built": "2026-11-25 00:46 UTC",
+  "notes": "Fixed: the haptic bumps now work while Backtrack is listening. They were being switched off by iOS because the microphone was on. Touch and hold Save that: bump at one second, bigger bump at two. The play area's latch buzz and the save confirmation buzz should be back too. If you still feel nothing, check Settings, Sounds and Haptics, System Haptics."
+}
